@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <include
+            resource="org/springframework/boot/logging/logback/defaults.xml" />
+    <property name="APP_LOG" value="/var/log/tomcat/springboot-app.log" />
+
+    <springProfile name="dev">
+        <property resource="application-dev.properties" />
+        <appender name="ROLLING"
+                  class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${APP_LOG}</file>
+            <rollingPolicy
+                    class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>var/log/tomcat/rotated/forms-%d{yyyy-MM-dd}.%i.txt
+                </fileNamePattern>
+                <maxFileSize>50MB</maxFileSize>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>1GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+        <logger name="org.springframework" level="DEBUG" additivity="false">
+            <appender-ref ref="ROLLING" />
+        </logger>
+        <root level="${debug.level}">
+            <appender-ref ref="ROLLING" />
+        </root>
+    </springProfile>
+    <springProfile name="preprod">
+        <property resource="application-preprod.properties" />
+        <appender name="ROLLING"
+                  class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${APP_LOG}</file>
+            <rollingPolicy
+                    class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>var/log/tomcat8/rotated/forms-%d{yyyy-MM-dd}.%i.txt
+                </fileNamePattern>
+                <maxFileSize>50MB</maxFileSize>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>1GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+        <root level="${debug.level}">
+            <appender-ref ref="ROLLING" />
+        </root>
+    </springProfile>
+</configuration>

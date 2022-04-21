@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Elastic Beanstalk Environment
+
+Parameters:
+  OrganizationName:
+    Type: String
+    Default: stratocrest-be-pccorp
+    Description: OrganizationName will be the name of the root element in the Self Service Portal. It should be representative of the Operating company name and be between 3 and 10 caracters long
+
+  Environment:
+    Type: String
+    Default: nonprod
+    Description: Account Environment
+    AllowedValues:
+      - nonprod
+      - prod
+
+  ResourcePrefix:
+    Type: String
+    Description: Specify the resource prefix of your project (e.g. ctappl3-dev)
+
+  EBApplicationNameSuffix:
+    Type: String
+    Description: The name of the elastic beanstalk application AFTER the ResourcePrefix (The combination of ResourcePrefix and EBApplicationNameSuffix must be unique)
+
+  VPCId:
+    Type: String
+    Description: The of the VPC that the elastic beanstalk application will be in.
+
+  ProcessPort:
+    Type: Number
+    Description: Port on which the underlying process runs
+    Default: 80
+
+Mappings:
+  SecurityGroupParameters:
+    nonprod:
+      CidrIp: "10.100.0.0/16" # Provide your nonprod VPC CIDR Range
+    prod:
+      CidrIp: "10.100.0.0/17" # Provide your prod VPC CIDR Range
+  ArchitecturePattern:
+    Values:
+      TagKey: local.architecture-pattern
+      TagValue: AppHosting/AWS/Beanstalk
+
+Resources:
+  EBEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-eb-sg
+      GroupDescription: Security Group for EB EC2 Instances
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: TCP
+          FromPort: !Ref ProcessPort
+          ToPort: !Ref ProcessPort
+          CidrIp: !FindInMap ["SecurityGroupParameters", !Ref Environment, "CidrIp"]
+      Tags: 
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  EBEC2IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-iam-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkCustomPlatformforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-policy-1
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - secretsmanager:GetSecretValue
+                  - sqs:*
+                  - execute-api:*
+                Resource: '*'
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/${OrganizationName}_${Environment}_LocalBrokerBoundary
+      Tags:
+        - Key: "project-admin-access"
+          Value: "true"
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  EBEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-ec2-instance-profile
+      Path: /
+      Roles:
+        - !Ref EBEC2IAMRole
+
+Outputs:
+  EC2SecurityGroup:
+    Value: !Ref EBEC2SecurityGroup
+    Description: The sgid to be used by the elastic beanstalk EC2 instances
+
+  EBEC2InstanceProfileArn:
+    Value: !GetAtt EBEC2InstanceProfile.Arn
+    Description: The arn of instance profile of the EC2 Instances.
+

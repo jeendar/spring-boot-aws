@@ -1,0 +1,272 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Gateway configuration for Elastic Beanstalk
+
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - 
+        Label: 
+          default: "API Gateway Configuration"
+        Parameters: 
+          - APIResourceName
+          - ApplicationName
+          - StageName
+          - APINameSuffix
+          - EBUrl
+          - AuthorizerFunction
+          - VpcEndpointId
+      - 
+        Label: 
+          default: "Elastic Beanstalk Configuration"
+        Parameters: 
+          - NLBArn
+      - 
+        Label: 
+          default: "Notification configuration"
+        Parameters: 
+          - NotificationList
+          - SilvaSNSTopicARN
+
+Parameters:
+  APIResourceName:
+    Type: String
+    Description: "The name of the API AWS Resource. Please follow the naming convention stated in the documentation: https://confluence.stratocrest.com/confluence/display/stratocrestBEAPIDESIGN/AWS+-+API+naming+convention. Format: be.stratocrest.{architectural zone}.{global.app}.{logical api-name}/{functional exposure}/{security mechanism}/{stage}/v{major version}"
+  
+  ApplicationName:
+    Type: String
+    Description: Enter the name of your application (first part of project name)
+
+  StageName:
+    Type: String
+    Description: Enter the stage name of the api used in your project (second part of project name)
+    AllowedValues:
+      - dev
+      - test
+      - uat
+      - preprod
+      - prod
+
+  APINameSuffix:
+    Type: String
+    Description: Enter the the name of the api (value to be appended after the resource prefix). Must be same as the suffix used for the Elastic Beanstalk.
+
+  EBUrl:
+    Type: String
+    Description: Enter the URL of the EB Environment
+
+  AuthorizerFunction:
+    Type: String
+    Description: The identifier of the authorizer lambda function that will authorize the X-stratocrest-Context token e.g. arn:aws:lambda:eu-central-1:249067891681:function:security-inbound-authorizer-dev-inboundSecurity. If left empty no authorizer is used.
+
+  VpcEndpointId:
+    Type: String
+    Description: The VPC Endpoint id (e.g. vpce-0872048e52b5260d5).
+
+  NLBArn:
+    Type: String
+    Description: The Arn of the NLB that the Elastic Beanstalk has created.
+
+  NotificationList:
+    Type: String
+    Description: Provide an email for the SNS notifications to be delivered
+
+  SilvaSNSTopicARN:
+    Type: String
+    Description: ARN of an existing Silva solution SNS Topic
+    Default: ""
+
+Mappings:
+  ArchitecturePattern:
+    Values:
+      TagKey: local.architecture-pattern
+      TagValue: 01/PIAAS.AWS/EIP-GTW.API-GTW/API
+
+Conditions:
+  HasSilvaSNSARN: !Not [!Equals [!Ref "SilvaSNSTopicARN", ""]]
+  HasAuthorizerFunctionArn: !Not [!Equals [!Ref "AuthorizerFunction", ""]]
+
+Resources:
+  API:
+    Type: AWS::ApiGateway::RestApi
+    DependsOn: [VpcLink]
+    Properties:
+      EndpointConfiguration:
+        Types: [ PRIVATE ]
+        VpcEndpointIds:
+          - !Ref VpcEndpointId
+      FailOnWarnings: True
+      Name: !Ref APIResourceName
+      Policy:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: 'execute-api:/*'
+          - Effect: Deny
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: 'execute-api:/*'
+            Condition:
+              StringNotEquals:
+                aws:SourceVpce: !Ref VpcEndpointId
+      Tags: 
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  RootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+        RestApiId: !Ref API
+        ResourceId: !GetAtt API.RootResourceId
+        HttpMethod: ANY
+        AuthorizationType: !If [HasAuthorizerFunctionArn, CUSTOM, NONE]
+        AuthorizerId: !If [HasAuthorizerFunctionArn, !Ref InboundSecurityApiGatewayAuthorizer, !Ref "AWS::NoValue"]
+        RequestParameters:
+          method.request.path.proxy: true
+        Integration:
+          CacheKeyParameters:
+            - 'method.request.path.proxy'
+          RequestParameters:
+            integration.request.path.proxy: 'method.request.path.proxy'
+          Type: HTTP_PROXY
+          IntegrationHttpMethod: ANY
+          ConnectionType: VPC_LINK
+          ConnectionId: !Ref VpcLink
+          Uri: !Sub http://${EBUrl}
+          PassthroughBehavior: WHEN_NO_MATCH
+          IntegrationResponses:
+            - StatusCode: "200"
+
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref API
+      ParentId: !GetAtt API.RootResourceId
+      PathPart: '{proxy+}'
+
+  AnyProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+        RestApiId: !Ref API
+        ResourceId: !Ref ProxyResource
+        HttpMethod: ANY
+        AuthorizationType: !If [HasAuthorizerFunctionArn, CUSTOM, NONE]
+        AuthorizerId: !If [HasAuthorizerFunctionArn, !Ref InboundSecurityApiGatewayAuthorizer, !Ref "AWS::NoValue"]
+        RequestParameters:
+          method.request.path.proxy: true
+        Integration:
+          CacheKeyParameters:
+            - 'method.request.path.proxy'
+          RequestParameters:
+            integration.request.path.proxy: 'method.request.path.proxy'
+          Type: HTTP_PROXY
+          IntegrationHttpMethod: ANY
+          ConnectionType: VPC_LINK
+          ConnectionId: !Ref VpcLink
+          Uri: !Sub http://${EBUrl}/{proxy}
+          PassthroughBehavior: WHEN_NO_MATCH
+          IntegrationResponses:
+            - StatusCode: "200"
+
+  InboundSecurityApiGatewayAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Condition: HasAuthorizerFunctionArn
+    Properties:
+      AuthorizerResultTtlInSeconds: 300
+      IdentitySource: method.request.header.X-stratocrest-Context
+      Name: inboundSecurity
+      RestApiId: !Ref API
+      AuthorizerUri: !Sub arn:aws:apigateway:eu-central-1:lambda:path/2015-03-31/functions/${AuthorizerFunction}/invocations
+      Type: TOKEN
+
+  Deployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [AnyProxyMethod,Code4XXError, Code5XXError,VpcLink]
+    Properties:
+      RestApiId: !Ref API
+      StageName: !Ref StageName
+      StageDescription:
+        AccessLogSetting:
+          DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+          Format: '{ "apiId":"$context.apiId", "stage":"$context.stage", "requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user","requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath", "status":"$context.status","protocol":"$context.protocol", "responseLength":"$context.responseLength" }'
+        LoggingLevel: INFO
+        MethodSettings:
+          - HttpMethod: '*'
+            LoggingLevel: INFO
+            MetricsEnabled: True
+            ResourcePath: '/*'
+        MetricsEnabled: True
+
+  VpcLink:
+    Type: AWS::ApiGateway::VpcLink
+    UpdateReplacePolicy: Retain
+    Properties:
+        Description: Vpc Link for API Gateway
+        Name: !Sub ${ApplicationName}-${StageName}-${APINameSuffix}-vpc-link
+        TargetArns:
+          - !Ref NLBArn
+
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${APIResourceName}
+      RetentionInDays: 400
+
+  Code5XXError:
+    DependsOn: API
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref APISNSTopic
+        - !If [HasSilvaSNSARN, !Ref "SilvaSNSTopicARN", !Ref "AWS::NoValue"]
+      EvaluationPeriods: 1
+      Statistic: Average
+      Threshold: 0.3
+      AlarmDescription: Alarm if >30% of requests in 2 minutes return 5XX Error.
+      Period: 120
+      Namespace: AWS/ApiGateway
+      Dimensions:
+      - Name: ApiName
+        Value: !Ref APIResourceName
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: 5XXError
+
+  Code4XXError:
+    DependsOn: API
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref APISNSTopic
+        - !If [HasSilvaSNSARN, !Ref "SilvaSNSTopicARN", !Ref "AWS::NoValue"]
+      EvaluationPeriods: 1
+      Statistic: Average
+      Threshold: 0.3
+      AlarmDescription: Alarm if >30% of requests in 2 minutes return 4XX Error.
+      Period: 120
+      Namespace: AWS/ApiGateway
+      Dimensions:
+      - Name: ApiName
+        Value: !Ref APIResourceName
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: 4XXError
+
+  APISNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub ${ApplicationName}-${StageName}-${APINameSuffix}-sns-topic
+      TopicName: !Sub ${ApplicationName}-${StageName}-${APINameSuffix}-sns-topic
+      Subscription:
+      - Endpoint: !Ref NotificationList
+        Protocol: email
+      Tags: 
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+Outputs:
+  ApiID:
+    Description: The ID of the API
+    Value: !Ref API
+
+  VpcLinkID:
+    Description: The ID of the VpcLink
+    Value: !Ref VpcLink

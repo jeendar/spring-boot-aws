@@ -1,0 +1,72 @@
+version: 0.2
+
+env:
+  secrets-manager:
+    ROOT_CA: /developer/stratocrest/Certificates/root/pubkey
+    INTERMEDIATE_CA: /developer/stratocrest/certificates/intermediatepr1/pubkey
+    MAVEN_SETTINGS: /developer/stratocrest/artifactory/maven/settings.xml
+  # parameter-store:
+    # INBOUND_LAMBDA_ARN: inbound_security_${STAGE}_arn
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto8
+    commands:
+      - yum install -y dos2unix
+  pre_build:
+    commands:
+      - export TARGET_PLATFORM="elastic-beanstalk"
+      - export APP_NAME="${APPLICATION}-${APPLICATION_COMPONENT}"
+      - export TAG_TABLE_NAME="${FT_NAME}-foundation"
+      # For Applications set: TAG_TABLE_NAME="${APPLICATION}-${STAGE}"
+      - export EB_IAM_SG_CREATION_STACK_NAME="application-$RESOURCE_PREFIX-$APP_NAME-eb-iam-sg"
+      - export EB_CREATION_STACK_NAME="application-$RESOURCE_PREFIX-$APP_NAME-eb"
+      - export EB_APIGW_CREATION_STACK_NAME="application-$RESOURCE_PREFIX-$APP_NAME-ebapigw"
+      - export WAR_FILE=$APP_NAME-$CODEBUILD_RESOLVED_SOURCE_VERSION.war
+      - export WAR_FILE_DIRECTORY="target"
+      - export S3_WAR_FILE=s3://$ARTEFACTS_BUCKET/$TARGET_PLATFORM/$WAR_FILE
+      - export SOLUTION_STACK="64bit Amazon Linux 2 v4.2.2 running Tomcat 8.5 Corretto 8"
+      - export NOTIFICATION_LIST="ismail.aitali@stratocrest.tech"
+      #- Environment and NotificationList to be taken from codebuild env variables
+  build:
+    # Build and package Java application as zip file using maven and upload to S3 using aws CLI
+    # Skip build if build artefact already exists for this commit ID
+    commands:
+      - |
+        aws s3 ls $S3_WAR_FILE
+        if [[ $? -ne 0 ]]; then
+          echo Preparing Maven
+          dos2unix ./scripts/prepare_maven.sh && chmod +rx ./scripts/prepare_maven.sh && source ./scripts/prepare_maven.sh
+          echo Installing stratocrest Certificates
+          dos2unix ./scripts/install_stratocrest_certificates.sh && chmod +rx ./scripts/install_stratocrest_certificates.sh && source ./scripts/install_stratocrest_certificates.sh
+          echo Starting Java EB build
+          dos2unix ./scripts/build.sh && chmod +rx ./scripts/build.sh && source ./scripts/build.sh
+          echo Running sonar scanner
+          dos2unix ./scripts/sonar.sh && chmod +rx ./scripts/sonar.sh && source ./scripts/sonar.sh
+        else
+          echo Build artefact already exists, skipping build
+          aws s3 cp $S3_WAR_FILE ${WAR_FILE_DIRECTORY}/$WAR_FILE
+        fi
+  post_build:
+    # Deploy Cloudformation templates
+    commands:
+      - if [[ $CODEBUILD_BUILD_SUCCEEDING -eq 0 ]]; then echo PREVIOUS STAGE HAS FAILED, STOPPING BUILD; exit 1; fi
+      - echo Adding ebextensions folder to source bundle
+      - zip -ur ${WAR_FILE_DIRECTORY}/*.war .ebextensions
+      - echo Adding platform folder to source bundle
+      - zip -ur ${WAR_FILE_DIRECTORY}/*.war .platform
+      - echo Uploading EB source bundle to S3 location [$S3_WAR_FILE]
+      - aws s3 cp ${WAR_FILE_DIRECTORY}/*.war $S3_WAR_FILE
+      - echo Reading Tags from DynamoDB
+      - dos2unix ./scripts/read_tags.sh && chmod +rx ./scripts/read_tags.sh && source ./scripts/read_tags.sh ${TAG_TABLE_NAME}
+      - echo Deploying Infrastructure
+      - dos2unix ./scripts/infra.sh && chmod +rx ./scripts/infra.sh && source ./scripts/infra.sh
+      - echo Adding deployment info tags to source repository
+      - dos2unix ./scripts/tag.sh && chmod +rx ./scripts/tag.sh && source ./scripts/tag.sh
+      - echo Build completed
+artifacts:
+  files:
+    - '**/*'
+  base-directory: '${WAR_FILE_DIRECTORY}*'
+  discard-paths: yes

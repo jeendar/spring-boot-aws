@@ -1,0 +1,478 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Elastic Beanstalk Environment
+
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - 
+        Label: 
+          default: "Account Configuration"
+        Parameters: 
+          - OrganizationName
+          - Environment
+      - 
+        Label: 
+          default: "Elastic Beanstalk Configuration"
+        Parameters: 
+          - ResourcePrefix
+          - EBApplicationNameSuffix
+          - CodeBucketName
+          - CodeZipName
+          - SolutionStack
+          - MstratocrestpplicationVersionAgeinDays
+          - PlatformUpdateLevel
+          - EC2InstanceProfileArn
+          - EC2SecurityGroupId
+          - NotificationList
+          - ProcessPort
+      - 
+        Label: 
+          default: "Elastic Beanstalk Network Configuration"
+        Parameters: 
+          - VPCId
+          - SubnetIds
+
+Parameters:
+  OrganizationName:
+    Type: String
+    Default: stratocrest-be-pccorp
+    Description: OrganizationName will be the name of the root element in the Self Service Portal. It should be representative of the Operating company name and be between 3 and 10 caracters long
+  
+  Environment:
+    Type: String
+    Default: nonprod
+    Description: Account Environment
+    AllowedValues:
+      - nonprod
+      - prod 
+
+  ResourcePrefix:
+    Type: String
+    Description: Specify the resource prefix of your project (e.g. ctappl3-dev)
+
+  Stage:
+    Type: String
+    Description: Stage on which resources are deployed
+
+  EBApplicationNameSuffix:
+    Type: String
+    Description: The name of the elastic beanstalk application AFTER the ResourcePrefix (The combination of ResourcePrefix and EBApplicationNameSuffix must be unique)
+
+  CodeBucketName: 
+    Type: String
+    Description: The bucket name that the code zip is in
+
+  CodeZipName: 
+    Type: String
+    Description: The name of the zip inside the bucket
+
+  VPCId: 
+    Type: String
+    Description: The of the VPC that the elastic beanstalk application will be in.
+  
+  VPCCIDR:
+    Type: String
+    Description: The CIDR of the VPC that the elastic beanstalk application will be in.
+  
+  SubnetIds:
+    Type: String
+    Description: The id of the one (or more) Subnets that the elastic beanstalk application will be in.
+
+  EC2InstanceProfileArn:
+    Type: String
+    Description: Provide an IAM Role to be used by the Elastic Beanstalk Instances. If left empty a new one will be created.
+
+  EC2SecurityGroupId:
+    Type: String
+    Description: Provide s security group for the EC2 Instances. If left empty a new one will be created.
+
+  SolutionStack:
+    Type: String
+    Description: Specify the solution stack of your application depending on your platform (list https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/concepts.platforms.html)
+
+  MstratocrestpplicationVersionAgeinDays:
+    Type: Number
+    Description: Specify the max number in days that the an application version will be stored in Elastic Beanstalk
+
+  PlatformUpdateLevel:
+    Type: String
+    Description: Specify the level of the platform updates
+    AllowedValues:
+      - patch
+      - minor
+    Default: patch
+
+  NotificationList:
+    Type: String
+    Description: Provide an email for the SNS notifications to be delivered
+
+  EFSFileSystemID:
+    Type: String
+    Description: (Optional) Provide the EFS FilesystemID you want to mount. Leave empty if you don't want to mount EFS.
+    Default: ""
+
+  EFSMountDirectory:
+    Type: String
+    Description: (Optional) Provide the EFS mount directory. Leave empty if you don't want to mount EFS.
+    Default: ""
+
+  InstancePort:
+    Type: Number
+    Description: Port on which the underlying process runs
+    Default: 80
+
+  ProcessPort:
+    Type: Number
+    Description: Port on which the underlying process runs
+    Default: 8080
+    
+Mappings:
+  # Configure Environment to scale down outside of business hours.
+  # The bellow values are a default example, please use the appropriate ones for your application
+  AutoscalingScheduling:
+    dev:
+      InstanceType: t3.micro
+      PreferredUpdateTime: Mon:09:00
+      OnBusinessHoursStartPeriod: 0 4 * * 1-5 # UTC Time
+      OnBusinessHoursMinSize: 2
+      OnBusinessHoursDesired: 2
+      OnBusinessHoursMaxSize: 2
+      OffBusinessHoursStartPeriod: 0 18 * * 1-5 # UTC Time
+      OffBusinessHoursMinSize: 0
+      OffBusinessHoursDesired: 0
+      OffBusinessHoursMaxSize: 0
+    preprod:
+      InstanceType: t3.micro
+      PreferredUpdateTime: Mon:09:00
+      OnBusinessHoursStartPeriod: 0 4 * * 1-5 # UTC Time
+      OnBusinessHoursMinSize: 1
+      OnBusinessHoursDesired: 1
+      OnBusinessHoursMaxSize: 1
+      OffBusinessHoursStartPeriod: 0 18 * * 1-5 # UTC Time
+      OffBusinessHoursMinSize: 0
+      OffBusinessHoursDesired: 0
+      OffBusinessHoursMaxSize: 0
+    prod:
+      InstanceType: t3.micro
+      PreferredUpdateTime: Sun:09:00
+      OnBusinessHoursStartPeriod: 0 4 * * 1-5 # UTC Time
+      OnBusinessHoursMinSize: 1
+      OnBusinessHoursDesired: 1
+      OnBusinessHoursMaxSize: 1
+      OffBusinessHoursStartPeriod: 0 18 * * 1-5 # UTC Time
+      OffBusinessHoursMinSize: 1
+      OffBusinessHoursDesired: 1
+      OffBusinessHoursMaxSize: 1
+  ArchitecturePattern:
+    Values:
+      TagKey: local.architecture-pattern
+      TagValue: AppHosting/AWS/Beanstalk
+
+Conditions:
+  HasNotEC2InstanceProfileArn: !Equals [!Ref "EC2InstanceProfileArn", ""]
+  HasNotEC2SecurityGroupId: !Equals [!Ref "EC2SecurityGroupId", ""]
+
+Resources:
+  EBEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: HasNotEC2SecurityGroupId
+    Properties:
+      GroupName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-ec2-sg
+      GroupDescription: Security Group for EB EC2 Instances
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: TCP
+          FromPort: !Ref InstancePort
+          ToPort: !Ref InstancePort
+          CidrIp: !Ref VPCCIDR
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !Ref VPCCIDR
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 65535
+          DestinationPrefixListId: pl-6ea54007 # s3 prefix list
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 65535
+          DestinationPrefixListId: pl-66a5400f # dynamodb prefix list
+      Tags: 
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  EBApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-app
+      Description: AWS Elastic Beanstalk Application
+      ResourceLifecycleConfig:
+        ServiceRole: !GetAtt EBServiceIAMRole.Arn
+        VersionLifecycleConfig: 
+          MstratocrestgeRule:
+            DeleteSourceFromS3: true
+            Enabled: true
+            MstratocrestgeInDays: !Ref MstratocrestpplicationVersionAgeinDays
+
+  EBApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: AWS ElasticBeanstalk Application Version
+      SourceBundle:
+        S3Bucket: !Ref CodeBucketName
+        S3Key: !Ref CodeZipName
+  
+  EBEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: AWS ElasticBeanstalk Sample Environment
+      VersionLabel: !Ref EBApplicationVersion
+      OptionSettings:
+        # Environment Variables
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: ENV
+          Value: !Ref Stage
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: VPC_ID
+          Value: !Ref VPCId
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: VPC_CIDR
+          Value: !Ref VPCCIDR
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: S3_ARTIFACTS_BUCKET
+          Value: !Ref CodeBucketName
+        # ScaleUpOnBusinessHours
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleUpOnBusinessHours
+          OptionName: Recurrence
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OnBusinessHoursStartPeriod"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleUpOnBusinessHours
+          OptionName: MinSize
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OnBusinessHoursMinSize"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleUpOnBusinessHours
+          OptionName: MaxSize
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OnBusinessHoursMaxSize"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleUpOnBusinessHours
+          OptionName: DesiredCapacity
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OnBusinessHoursDesired"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleUpOnBusinessHours
+          OptionName: Suspend
+          Value: true
+        # ScaleDownOffBusinessHours
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleDownOffBusinessHours
+          OptionName: Recurrence
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OffBusinessHoursStartPeriod"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleDownOffBusinessHours
+          OptionName: MinSize
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OffBusinessHoursMinSize"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleDownOffBusinessHours
+          OptionName: MaxSize
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OffBusinessHoursMaxSize"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleDownOffBusinessHours
+          OptionName: DesiredCapacity
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OffBusinessHoursDesired"]
+        - Namespace: aws:autoscaling:scheduledaction
+          ResourceName: ScaleDownOffBusinessHours
+          OptionName: Suspend
+          Value: true
+        # Instance Type
+        - Namespace: aws:ec2:instances
+          OptionName: InstanceTypes
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "InstanceType"]
+        # Autoscaling values
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OnBusinessHoursMinSize"]
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: !FindInMap ["AutoscalingScheduling", !Ref Stage, "OnBusinessHoursMaxSize"]
+        # Env Type
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        # VPC
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref VPCId
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value: !Ref SubnetIds
+        # Network Ports
+        - Namespace: aws:elasticbeanstalk:environment:process:default # The port that the ec2 instance listens to
+          OptionName: Port
+          Value: !Ref InstancePort
+        - Namespace:  aws:elasticbeanstalk:application:environment # The port that the application listens to
+          OptionName: PORT
+          Value: !Ref ProcessPort
+        # IMDSv2 
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: DisableIMDSv1
+          Value: true
+        # SG
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !If [HasNotEC2SecurityGroupId, !Ref EBEC2SecurityGroup, !Ref EC2SecurityGroupId]          
+        # IAM
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !If [HasNotEC2InstanceProfileArn, !GetAtt EBEC2InstanceProfile.Arn, !Ref EC2InstanceProfileArn]
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: ServiceRole
+          Value: !GetAtt EBServiceIAMRole.Arn
+        # Logs & Health
+        - Namespace: aws:elasticbeanstalk:cloudwatch:logs
+          OptionName: StreamLogs
+          Value: 'true'
+        - Namespace: aws:elasticbeanstalk:cloudwatch:logs
+          OptionName: RetentionInDays
+          Value: '400'  
+        - Namespace: aws:elasticbeanstalk:healthreporting:system
+          OptionName: SystemType
+          Value: enhanced
+        - Namespace: aws:elasticbeanstalk:cloudwatch:logs:health
+          OptionName: HealthStreamingEnabled
+          Value: 'true'
+        # LB
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBSubnets
+          Value: !Ref SubnetIds
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBScheme
+          Value: internal
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: network
+        # Managed Updates
+        - Namespace: aws:elasticbeanstalk:managedactions
+          OptionName: ManagedActionsEnabled
+          Value: 'true'
+        - Namespace: aws:elasticbeanstalk:managedactions
+          OptionName: PreferredStartTime
+          Value: !FindInMap [AutoscalingScheduling, !Ref Stage, PreferredUpdateTime]
+        - Namespace: aws:elasticbeanstalk:managedactions:platformupdate
+          OptionName: UpdateLevel
+          Value: !Ref PlatformUpdateLevel
+        - Namespace: aws:elasticbeanstalk:managedactions:platformupdate
+          OptionName: InstanceRefreshEnabled
+          Value: true
+        # SNS
+        - Namespace: aws:elasticbeanstalk:sns:topics
+          OptionName: Notification Endpoint
+          Value: !Ref NotificationList
+        - Namespace: aws:elasticbeanstalk:sns:topics
+          OptionName: Notification Protocol
+          Value: email 
+        - Namespace: aws:elasticbeanstalk:sns:topics
+          OptionName: Notification Topic Name
+          Value: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-topic
+        # EFS
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: FILE_SYSTEM_ID
+          Value: !Ref EFSFileSystemID
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: MOUNT_DIRECTORY
+          Value: !Ref EFSMountDirectory
+      SolutionStackName: !Ref SolutionStack
+      Tags: 
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  EBServiceIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-service-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: elasticbeanstalk.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkManagedUpdatesCustomerRolePolicy
+        - arn:aws:iam::aws:policy/service-role/AWSElasticBeanstalkEnhancedHealth
+      Policies:
+        - PolicyName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-service-role-policy-1
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:*
+                Resource:
+                  - !Sub 'arn:aws:sns:*:*:${ResourcePrefix}-${EBApplicationNameSuffix}*'
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/${OrganizationName}_${Environment}_LocalBrokerBoundary
+      Tags: 
+        - Key: "project-admin-access"
+          Value: "true"
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  EBEC2IAMRole:
+    Type: AWS::IAM::Role
+    Condition: HasNotEC2InstanceProfileArn
+    Properties:
+      RoleName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkCustomPlatformforEC2Role
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+      Policies:
+        - PolicyName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-policy-1
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - sqs:*
+                  - execute-api:*
+                Resource: '*'
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/${OrganizationName}_${Environment}_LocalBrokerBoundary
+      Tags: 
+        - Key: "project-admin-access"
+          Value: "true"
+        - Key: !FindInMap [ArchitecturePattern, Values, TagKey]
+          Value: !FindInMap [ArchitecturePattern, Values, TagValue]
+
+  EBEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: HasNotEC2InstanceProfileArn
+    Properties:
+      InstanceProfileName: !Sub ${ResourcePrefix}-${EBApplicationNameSuffix}-instance-profile
+      Path: /
+      Roles:
+      - !Ref EBEC2IAMRole
+
+Outputs:
+  EBApplicationName:
+    Value: !Ref EBApplication
+    Description: The name of the Elastic Beanstalk application
+
+  EBEnvironment:
+    Value: !Ref EBEnvironment
+    Description: The name of the Elastic Beanstalk Environment
+
+  EBUrl:
+    Value: !GetAtt EBEnvironment.EndpointURL
+    Description: The URL of the Elastic Beanstalk Environment
